@@ -1,78 +1,100 @@
--- Wall Maker Script for Delta
-local TeleportService = game:GetService("TeleportService")
 local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+
 local player = Players.LocalPlayer
-local character = player.Character or player.CharacterAdded:Wait()
-local placeId = game.PlaceId
+local char = player.Character or player.CharacterAdded:Wait()
+local humanoid = char:WaitForChild("Humanoid")
+local hrp = char:WaitForChild("HumanoidRootPart")
 
-local wallColor = Color3.fromRGB(255, 0, 0) -- Red
+local teleporting = false
+local originalPos = nil
+local sittingSeat = nil
+local bikeBasePart = nil
+local lockBlock = nil
 
--- Wall 1
-local wall1_point1 = Vector3.new(-287.26, 250, 350)
-local wall1_point2 = Vector3.new(-231.89, 265.07, 357.42)
-
-local wall1_center = (wall1_point1 + wall1_point2) / 2
-local wall1_size = Vector3.new(
-    math.abs(wall1_point1.X - wall1_point2.X),
-    math.abs(wall1_point1.Y - wall1_point2.Y),
-    math.max(1, math.abs(wall1_point1.Z - wall1_point2.Z))
-)
-
-local wall1 = Instance.new("Part")
-wall1.Size = wall1_size
-wall1.Position = wall1_center
-wall1.Anchored = true
-wall1.Color = wallColor
-wall1.Material = Enum.Material.Neon
-wall1.CanCollide = false
-wall1.Transparency = 0
-wall1.Parent = workspace
-task.wait(0.1)
-
--- Wall 2
-local wall2_point1 = Vector3.new(-287.26, 250, 350)
-local wall2_point2 = Vector3.new(-287.16, 265, 330.31)
-
-local wall2_center = (wall2_point1 + wall2_point2) / 2
-local wall2_size = Vector3.new(
-    math.max(1, math.abs(wall2_point1.X -wall2_point2.X)),
-    math.abs(wall2_point1.Y - wall2_point2.Y),
-    math.abs(wall2_point1.Z - wall2_point2.Z)
-)
-
-local wall2 = Instance.new("Part")
-wall2.Size = wall2_size
-wall2.Position = wall2_center
-wall2.Anchored = true
-wall2.Color = wallColor
-wall2.Material = Enum.Material.Neon
-wall2.CanCollide = false
-wall2.Transparency = 0
-wall2.Parent = workspace
-task.wait(0.1)
-
--- Function to teleport to a new server and auto-load scripts
-local function rejoinNewServer()
-    -- Queue the scripts to run when teleporting
-    local queuedScript = [[
-        loadstring(game:HttpGet("https://raw.githubusercontent.com/xQuartyx/QuartyzScript/refs/heads/main/Block%20Spin/Default.lua"))();
-        loadstring(game:HttpGet("https://raw.githubusercontent.com/Nate7953/Blockspin-new-auto-/refs/heads/main/Auto.lua"))();
-    ]]
-    queue_on_teleport(queuedScript)
-
-    -- Teleport to a new random server (not same one)
-    TeleportService:TeleportAsync(placeId, {}, player)
+-- Random nearby air position
+local function getRandomNearbyPosition(center)
+	local radius = 20
+	local height = 10
+	local offset = Vector3.new(
+		math.random(-radius, radius),
+		height + math.random(2, 5),
+		math.random(-radius, radius)
+	)
+	return center + offset
 end
 
--- Connect Touch
-local function connectWallTouch(wall)
-    wall.Touched:Connect(function(hit)
-        if hit and hit.Parent == character then
-            rejoinNewServer()
-        end
-    end)
+-- Find seat and detect base of bike
+local function tryDismountAndGetBikeBase()
+	for _, part in pairs(Workspace:GetDescendants()) do
+		if (part:IsA("Seat") or part:IsA("VehicleSeat")) and part.Occupant == humanoid then
+			sittingSeat = part
+			part:Sit(nil)
+			bikeBasePart = part.Parent and part.Parent:FindFirstChildWhichIsA("BasePart")
+			break
+		end
+	end
 end
 
-connectWallTouch(wall1)
-connectWallTouch(wall2)
+-- Re-seat player if possible
+local function tryReseat()
+	if sittingSeat and sittingSeat.Parent then
+		task.delay(0.2, function()
+			sittingSeat:Sit(humanoid)
+		end)
+	end
+end
 
+-- Place invisible anchor block under bike
+local function placeLockBlock()
+	if bikeBasePart then
+		lockBlock = Instance.new("Part")
+		lockBlock.Anchored = true
+		lockBlock.CanCollide = true
+		lockBlock.Size = Vector3.new(6, 2, 6)
+		lockBlock.Position = bikeBasePart.Position - Vector3.new(0, bikeBasePart.Size.Y / 2 + 1, 0)
+		lockBlock.Transparency = 1
+		lockBlock.Name = "BikeLockBlock"
+		lockBlock.Parent = Workspace
+	end
+end
+
+-- Remove the anchor block
+local function removeLockBlock()
+	if lockBlock and lockBlock.Parent then
+		lockBlock:Destroy()
+		lockBlock = nil
+	end
+end
+
+-- Teleport + Lock logic
+local function teleportAwayLoop()
+	RunService.Heartbeat:Connect(function()
+		if humanoid.Health <= 16 and not teleporting then
+			teleporting = true
+			originalPos = hrp.Position
+			tryDismountAndGetBikeBase()
+			placeLockBlock()
+			print("Escaping, bike locked to ground.")
+
+			while humanoid.Health <= 32 and humanoid.Health > 0 do
+				hrp.CFrame = CFrame.new(getRandomNearbyPosition(originalPos))
+				task.wait(0.3)
+			end
+
+			if humanoid.Health > 0 then
+				hrp.CFrame = CFrame.new(originalPos + Vector3.new(0, 3, 0))
+				tryReseat()
+				removeLockBlock()
+				print("Returned and bike unlocked.")
+			end
+
+			teleporting = false
+			sittingSeat = nil
+			bikeBasePart = nil
+		end
+	end)
+end
+
+teleportAwayLoop()
